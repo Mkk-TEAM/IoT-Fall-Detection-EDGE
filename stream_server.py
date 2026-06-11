@@ -162,17 +162,47 @@ class Handler(BaseHTTPRequestHandler):
         if not target.exists() or not target.suffix == ".mp4":
             self.send_error(404, "Clip not found")
             return
+
         size = target.stat().st_size
-        self.send_response(200)
+        range_header = self.headers.get("Range", "")
+
+        # Parse Range: bytes=start-end
+        start, end = 0, size - 1
+        is_range = False
+        if range_header.startswith("bytes="):
+            is_range = True
+            parts = range_header[6:].split("-")
+            try:
+                if parts[0]:
+                    start = int(parts[0])
+                if parts[1]:
+                    end = int(parts[1])
+            except (IndexError, ValueError):
+                self.send_error(416, "Range Not Satisfiable")
+                return
+            if start > end or end >= size:
+                self.send_error(416, "Range Not Satisfiable")
+                return
+
+        length = end - start + 1
+        self.send_response(206 if is_range else 200)
         self.send_header("Content-Type", "video/mp4")
-        self.send_header("Content-Length", size)
+        self.send_header("Content-Length", length)
         self.send_header("Accept-Ranges", "bytes")
+        if is_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self._cors()
         self.end_headers()
         with open(target, "rb") as f:
-            while chunk := f.read(65536):
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(65536, remaining))
+                if not chunk:
+                    break
                 try:
                     self.wfile.write(chunk)
+                    remaining -= len(chunk)
                 except Exception:
                     break
 
