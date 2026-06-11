@@ -1,0 +1,18 @@
+[Unit]
+Description=MJPEG HTTP camera stream (OV5647)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=video
+WorkingDirectory=/home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE
+ExecStart=/usr/bin/python3 /home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE/stream_server.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
