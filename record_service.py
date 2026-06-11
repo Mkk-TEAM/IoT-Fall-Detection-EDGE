@@ -61,6 +61,11 @@ def _record_loop():
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "28",
+            # frag_keyframe: each keyframe starts a new fragment with its own
+            # metadata, so the file is playable even if recording is interrupted.
+            # empty_moov: write an empty initial moov so browsers can start
+            # buffering immediately without waiting for the full file.
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
             str(out),
         ]
         print(f"[REC] → {out}", flush=True)
