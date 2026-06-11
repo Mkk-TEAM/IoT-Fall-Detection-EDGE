@@ -76,13 +76,17 @@ def _cleanup_loop():
 
 
 def _record_loop():
-    """Record SEGMENT_SECONDS-long clips one after another, then extract thumbnail."""
+    """Record SEGMENT_SECONDS-long clips one after another, then extract thumbnail.
+
+    Uses wall-clock time (Popen + terminate) instead of ffmpeg's -t flag because
+    MJPEG HTTP streams carry no PTS timestamps — ffmpeg infers them from frame
+    arrival rate, which can drift significantly from real time.
+    """
     while True:
         out = _next_clip_path()
         cmd = [
             "ffmpeg", "-y",
             "-i", STREAM_URL,
-            "-t", str(SEGMENT_SECONDS),
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "28",
@@ -91,12 +95,18 @@ def _record_loop():
         ]
         print(f"[REC] → {out}", flush=True)
         try:
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode == 0:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            time.sleep(SEGMENT_SECONDS)
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            if out.exists() and out.stat().st_size > 0:
                 _extract_thumbnail(out)
             else:
-                err = result.stderr.decode(errors="replace")[-200:]
-                print(f"[REC] ffmpeg error: {err}", flush=True)
+                print(f"[REC] Empty or missing output: {out}", flush=True)
                 time.sleep(5)
         except Exception as exc:
             print(f"[REC] Error: {exc}", flush=True)
