@@ -15,7 +15,7 @@ Environment=EDGE_PUBLIC_HOST=192.168.2.14
 Environment=EDGE_STREAM_PORT=8081
 Environment=CLIP_DIR=/media/usb/camera
 Environment=HEALTH_LOG_INTERVAL_SECONDS=5
-Environment=FALL_PROBABILITY_PER_MINUTE=0.2
+Environment=FALL_PROBABILITY_PER_MINUTE=1.0
 ExecStart=/usr/bin/python3 /home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE/imu_simulator.py
 Restart=always
 RestartSec=5

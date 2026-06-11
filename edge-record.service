@@ -9,7 +9,7 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE
 Environment=EDGE_STREAM_URL=http://localhost:8081/stream.mjpg
 Environment=CLIP_DIR=/media/usb/camera
-Environment=CLIP_SEGMENT_SECONDS=300
+Environment=CLIP_SEGMENT_SECONDS=60
 Environment=CLIP_RETENTION_HOURS=72
 ExecStart=/usr/bin/python3 /home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE/record_service.py
 Restart=always
