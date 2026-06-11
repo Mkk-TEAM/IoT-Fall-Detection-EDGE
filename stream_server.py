@@ -6,9 +6,11 @@ import os
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 HOST    = os.environ.get("EDGE_STREAM_HOST", "0.0.0.0")
 PORT    = int(os.environ.get("EDGE_STREAM_PORT", 8081))
+CLIP_DIR = Path(os.environ.get("CLIP_DIR", "/media/usb/camera"))
 W       = int(os.environ.get("CAMERA_WIDTH",  640))
 H       = int(os.environ.get("CAMERA_HEIGHT", 480))
 FPS     = int(os.environ.get("CAMERA_FPS",    15))
@@ -127,8 +129,52 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # client disconnected — normal
 
+        elif path == "/clips":
+            self._list_clips()
+
+        elif path.startswith("/clips/"):
+            self._serve_clip(path[len("/clips/"):])
+
         else:
             self.send_error(404)
+
+    def _list_clips(self):
+        clips = sorted(CLIP_DIR.rglob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+        data = []
+        for f in clips:
+            rel = str(f.relative_to(CLIP_DIR))
+            data.append({
+                "path": rel,
+                "url": f"/clips/{rel}",
+                "size": f.stat().st_size,
+                "mtime": f.stat().st_mtime,
+            })
+        self._json(200, {"clips": data, "count": len(data)})
+
+    def _serve_clip(self, rel: str):
+        # Prevent path traversal
+        try:
+            target = (CLIP_DIR / rel).resolve()
+            target.relative_to(CLIP_DIR.resolve())
+        except (ValueError, Exception):
+            self.send_error(400, "Invalid path")
+            return
+        if not target.exists() or not target.suffix == ".mp4":
+            self.send_error(404, "Clip not found")
+            return
+        size = target.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", size)
+        self.send_header("Accept-Ranges", "bytes")
+        self._cors()
+        self.end_headers()
+        with open(target, "rb") as f:
+            while chunk := f.read(65536):
+                try:
+                    self.wfile.write(chunk)
+                except Exception:
+                    break
 
     def _json(self, code: int, obj: dict) -> None:
         self._raw(code, "application/json", json.dumps(obj).encode())

@@ -1,0 +1,26 @@
+[Unit]
+Description=EDGE IMU simulator — fake wearable BLE data to backend
+After=edge-stream.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE
+Environment=BE_BASE_URL=http://localhost:3000/api/v1
+Environment=EDGE_SECRET=398b5b487f84ce5635a2e9879b916e14f0385ed91c042a736699d91a6bc50669
+Environment=IMU_DEVICE_ID=imu_001
+Environment=GATEWAY_ID=gw_001
+Environment=EDGE_PUBLIC_HOST=192.168.2.14
+Environment=EDGE_STREAM_PORT=8081
+Environment=CLIP_DIR=/media/usb/camera
+Environment=HEALTH_LOG_INTERVAL_SECONDS=5
+Environment=FALL_PROBABILITY_PER_MINUTE=0.2
+ExecStart=/usr/bin/python3 /home/ubuntu/BK/252_DADN/IoT-Fall-Detection-EDGE/imu_simulator.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
