@@ -94,8 +94,11 @@ def _latest_clip_url() -> str | None:
     return f"http://{STREAM_HOST}:{STREAM_PORT}/clips/{rel}"
 
 
-def _snapshot_url() -> str:
-    return f"http://{STREAM_HOST}:{STREAM_PORT}/snapshot.jpg"
+def _thumbnail_url(clip_url: str | None) -> str | None:
+    """Return the thumbnail URL for a given clip URL by swapping .mp4 → .jpg and /clips/ → /thumbs/."""
+    if not clip_url:
+        return None
+    return clip_url.replace("/clips/", "/thumbs/").replace(".mp4", ".jpg")
 
 
 # ── Fall trigger ──────────────────────────────────────────────────────────────
@@ -104,6 +107,7 @@ def _trigger_fall():
     fall_data = _fall_imu()
     confidence = round(random.uniform(0.76, 0.97), 2)
     video_url  = _latest_clip_url()
+    thumb_url  = _thumbnail_url(video_url)
 
     print(f"[IMU] ⚠️  FALL  confidence={confidence}  video={video_url}", flush=True)
 
@@ -115,7 +119,7 @@ def _trigger_fall():
         "deviceId":       DEVICE_ID,
         "gatewayId":      GATEWAY_ID,
         "message":        f"Phát hiện té ngã (confidence: {confidence:.0%})",
-        "snapshotUrl":    _snapshot_url(),
+        "snapshotUrl":    thumb_url,
         "relatedVideoUrl": video_url,
     })
     if result and result.get("success"):

@@ -135,6 +135,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/clips/"):
             self._serve_clip(path[len("/clips/"):])
 
+        elif path.startswith("/thumbs/"):
+            self._serve_thumb(path[len("/thumbs/"):])
+
         else:
             self.send_error(404)
 
@@ -205,6 +208,19 @@ class Handler(BaseHTTPRequestHandler):
                     remaining -= len(chunk)
                 except Exception:
                     break
+
+    def _serve_thumb(self, rel: str):
+        try:
+            target = (CLIP_DIR / rel).resolve()
+            target.relative_to(CLIP_DIR.resolve())
+        except (ValueError, Exception):
+            self.send_error(400, "Invalid path")
+            return
+        if not target.exists() or target.suffix != ".jpg":
+            self.send_error(404, "Thumbnail not found")
+            return
+        body = target.read_bytes()
+        self._raw(200, "image/jpeg", body)
 
     def _json(self, code: int, obj: dict) -> None:
         self._raw(code, "application/json", json.dumps(obj).encode())
