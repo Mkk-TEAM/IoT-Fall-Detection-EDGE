@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Simulate BLE IMU wearable sending data to the backend.
 
-- POST /api/v1/internal/health-logs every HEALTH_LOG_INTERVAL_SECONDS (default 5)
+- POST /api/v1/internal/device-status-logs every HEALTH_LOG_INTERVAL_SECONDS (default 5)
 - Randomly trigger FALL events (FALL_PROBABILITY_PER_MINUTE, default 0.2/min ≈ once every 5 min)
 - On FALL: attach latest video clip URL + snapshot URL to the event payload
 """
@@ -15,6 +15,26 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+from pathlib import Path
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Load key=value pairs from a .env file into os.environ (no-op if file missing)."""
+    p = Path(path)
+    if not p.exists():
+        return
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+_load_dotenv()
 
 BE_URL          = os.environ.get("BE_BASE_URL",         "http://localhost:3000/api/v1")
 EDGE_SECRET     = os.environ.get("EDGE_SECRET",         "")
@@ -49,37 +69,45 @@ def _post(path: str, body: dict) -> dict | None:
 
 # ── Data generators ───────────────────────────────────────────────────────────
 
-def _normal_imu(t: float) -> dict:
-    """Smooth sinusoidal data — person at rest / slow movement."""
+def _normal_status(t: float) -> dict:
+    """Normal device status — IMU online, gửi raw IMU data trong rawPayload."""
     return {
-        "deviceId":      DEVICE_ID,
-        "accelX":        round(0.08 * math.sin(t * 0.3)  + random.gauss(0, 0.02), 3),
-        "accelY":        round(0.06 * math.cos(t * 0.25) + random.gauss(0, 0.02), 3),
-        "accelZ":        round(9.81 + 0.04 * math.sin(t * 0.5) + random.gauss(0, 0.01), 3),
-        "gyroX":         round(random.gauss(0, 0.8), 3),
-        "gyroY":         round(random.gauss(0, 0.8), 3),
-        "gyroZ":         round(random.gauss(0, 0.4), 3),
-        "tiltAngle":     round(5 + 2 * math.sin(t * 0.1), 2),
-        "movementLevel": round(max(0, 0.10 + 0.04 * abs(math.sin(t * 0.4)) + random.gauss(0, 0.01)), 3),
-        "batteryLevel":  max(10, 85 - int(t / 3600)),
-        "timestamp":     datetime.utcnow().isoformat() + "Z",
+        "deviceId":   DEVICE_ID,
+        "gatewayId":  GATEWAY_ID,
+        "status":     "ONLINE",
+        "source":     "ble_simulator",
+        "timestamp":  datetime.utcnow().isoformat() + "Z",
+        "rawPayload": {
+            "accelX":        round(0.08 * math.sin(t * 0.3)  + random.gauss(0, 0.02), 3),
+            "accelY":        round(0.06 * math.cos(t * 0.25) + random.gauss(0, 0.02), 3),
+            "accelZ":        round(9.81 + 0.04 * math.sin(t * 0.5) + random.gauss(0, 0.01), 3),
+            "gyroX":         round(random.gauss(0, 0.8), 3),
+            "gyroY":         round(random.gauss(0, 0.8), 3),
+            "gyroZ":         round(random.gauss(0, 0.4), 3),
+            "tiltAngle":     round(5 + 2 * math.sin(t * 0.1), 2),
+            "movementLevel": round(max(0, 0.10 + 0.04 * abs(math.sin(t * 0.4)) + random.gauss(0, 0.01)), 3),
+        },
     }
 
 
-def _fall_imu() -> dict:
-    """Spike data simulating a fall — large acceleration + rapid rotation."""
+def _fall_status() -> dict:
+    """Fall event — status ONLINE với spike IMU data trong rawPayload."""
     return {
-        "deviceId":      DEVICE_ID,
-        "accelX":        round(random.uniform(3.5, 5.5), 3),
-        "accelY":        round(random.uniform(2.8, 4.5), 3),
-        "accelZ":        round(random.uniform(0.3, 1.8), 3),
-        "gyroX":         round(random.uniform(55, 130), 3),
-        "gyroY":         round(random.uniform(45, 110), 3),
-        "gyroZ":         round(random.uniform(20, 60),  3),
-        "tiltAngle":     round(random.uniform(62, 88),  2),
-        "movementLevel": round(random.uniform(0.82, 1.0), 3),
-        "batteryLevel":  80,
-        "timestamp":     datetime.utcnow().isoformat() + "Z",
+        "deviceId":   DEVICE_ID,
+        "gatewayId":  GATEWAY_ID,
+        "status":     "ONLINE",
+        "source":     "ble_simulator",
+        "timestamp":  datetime.utcnow().isoformat() + "Z",
+        "rawPayload": {
+            "accelX":        round(random.uniform(3.5, 5.5), 3),
+            "accelY":        round(random.uniform(2.8, 4.5), 3),
+            "accelZ":        round(random.uniform(0.3, 1.8), 3),
+            "gyroX":         round(random.uniform(55, 130), 3),
+            "gyroY":         round(random.uniform(45, 110), 3),
+            "gyroZ":         round(random.uniform(20, 60),  3),
+            "tiltAngle":     round(random.uniform(62, 88),  2),
+            "movementLevel": round(random.uniform(0.82, 1.0), 3),
+        },
     }
 
 
@@ -104,14 +132,14 @@ def _thumbnail_url(clip_url: str | None) -> str | None:
 # ── Fall trigger ──────────────────────────────────────────────────────────────
 
 def _trigger_fall():
-    fall_data = _fall_imu()
+    fall_data  = _fall_status()
     confidence = round(random.uniform(0.76, 0.97), 2)
     video_url  = _latest_clip_url()
     thumb_url  = _thumbnail_url(video_url)
 
     print(f"[IMU] ⚠️  FALL  confidence={confidence}  video={video_url}", flush=True)
 
-    _post("/internal/health-logs", fall_data)
+    _post("/internal/device-status-logs", fall_data)
     result = _post("/internal/events", {
         "eventType":      "FALL",
         "priority":       "CRITICAL",
@@ -139,8 +167,8 @@ def main():
 
     t = 0.0
     while True:
-        imu = _normal_imu(t)
-        _post("/internal/health-logs", imu)
+        status = _normal_status(t)
+        _post("/internal/device-status-logs", status)
 
         if random.random() < fall_prob_per_tick:
             _trigger_fall()
