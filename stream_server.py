@@ -5,8 +5,24 @@ import json
 import os
 import subprocess
 import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+
+def _load_dotenv(path=".env"):
+    p = Path(path)
+    if p.exists():
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip(); v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+
+_load_dotenv()
 
 HOST    = os.environ.get("EDGE_STREAM_HOST", "0.0.0.0")
 PORT    = int(os.environ.get("EDGE_STREAM_PORT", 8081))
@@ -15,6 +31,11 @@ W       = int(os.environ.get("CAMERA_WIDTH",  640))
 H       = int(os.environ.get("CAMERA_HEIGHT", 480))
 FPS     = int(os.environ.get("CAMERA_FPS",    15))
 QUALITY = int(os.environ.get("JPEG_QUALITY",  80))
+
+BE_BASE_URL      = os.environ.get("BE_BASE_URL",  "http://localhost:3000/api/v1")
+EDGE_SECRET      = os.environ.get("EDGE_SECRET",  "")
+CAMERA_DEVICE_ID = "cam_001"
+HEARTBEAT_SEC    = 30
 
 SOI = b"\xff\xd8"
 EOI = b"\xff\xd9"
@@ -245,8 +266,31 @@ except ImportError:
     _BaseServer = HTTPServer
 
 
+def _camera_heartbeat_loop() -> None:
+    """Send PATCH /internal/devices/cam_001/heartbeat every HEARTBEAT_SEC seconds."""
+    url = f"{BE_BASE_URL}/internal/devices/{CAMERA_DEVICE_ID}/heartbeat"
+    time.sleep(5)  # wait for camera to initialize
+    while True:
+        status = "ONLINE" if _camera_ok else "OFFLINE"
+        payload = json.dumps({"status": status}).encode()
+        try:
+            req = urllib.request.Request(
+                url, data=payload, method="PATCH",
+                headers={
+                    "Content-Type":  "application/json",
+                    "X-Edge-Secret": EDGE_SECRET,
+                },
+            )
+            urllib.request.urlopen(req, timeout=5)
+            print(f"[HEARTBEAT] camera {CAMERA_DEVICE_ID} → {status}", flush=True)
+        except Exception as e:
+            print(f"[HEARTBEAT] failed: {e}", flush=True)
+        time.sleep(HEARTBEAT_SEC)
+
+
 def main() -> None:
     threading.Thread(target=capture_loop, daemon=True).start()
+    threading.Thread(target=_camera_heartbeat_loop, daemon=True).start()
 
     server = _BaseServer((HOST, PORT), Handler)
     print(f"[INFO] Edge stream server  http://{HOST}:{PORT}", flush=True)

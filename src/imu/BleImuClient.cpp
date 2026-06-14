@@ -3,8 +3,11 @@
 #include <simpleble/SimpleBLE.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <iostream>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -88,8 +91,23 @@ void BleImuClient::handle_notification(const uint8_t *data, size_t len) {
     }
 
     ++stats_.packets_valid;
+
+    // Sequence gap tracking
+    if (stats_.packets_valid > 1) {
+        uint16_t expected = static_cast<uint16_t>(rtt_prev_seq_ + 1);
+        if (pkt.seq != expected) {
+            uint16_t gap = static_cast<uint16_t>(pkt.seq - rtt_prev_seq_);
+            if (gap > 0 && gap < 1000) stats_.seq_gaps += (gap - 1);
+        }
+    }
+
     stats_.last_seq = pkt.seq;
     last_packet_tp_ = std::chrono::steady_clock::now();
+
+    // RTT jitter measurement using esp_ms vs gateway wall clock
+    int64_t gw_ms_now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    update_rtt(pkt.esp_ms, gw_ms_now, pkt.seq);
 
     // Hz estimate — update over 5-second window
     ++hz_window_count_;
@@ -108,6 +126,57 @@ void BleImuClient::handle_notification(const uint8_t *data, size_t len) {
     }
 }
 
+// ── RTT jitter ────────────────────────────────────────────────────────────────
+
+void BleImuClient::update_rtt(uint32_t esp_ms, int64_t gw_ms, uint16_t seq) {
+    // Caller holds stats_mutex_
+    if (!rtt_has_prev_) {
+        rtt_prev_esp_ms_ = esp_ms;
+        rtt_prev_gw_ms_  = gw_ms;
+        rtt_prev_seq_    = seq;
+        rtt_has_prev_    = true;
+        return;
+    }
+
+    int64_t esp_delta = static_cast<int64_t>(esp_ms) - rtt_prev_esp_ms_;
+    int64_t gw_delta  = gw_ms - rtt_prev_gw_ms_;
+
+    // Discard outliers: esp_delta must be plausible (1–200ms at 50Hz)
+    if (esp_delta > 0 && esp_delta < 200 && gw_delta > 0 && gw_delta < 500) {
+        double jitter = static_cast<double>(gw_delta - esp_delta);
+        jitter_buf_[jitter_head_] = std::fabs(jitter);
+        jitter_head_ = (jitter_head_ + 1) % RTT_WIN;
+        if (jitter_count_ < RTT_WIN) ++jitter_count_;
+
+        // Recompute stats every 50 new samples
+        if (jitter_count_ % 50 == 0) recompute_rtt_stats();
+    }
+
+    rtt_prev_esp_ms_ = esp_ms;
+    rtt_prev_gw_ms_  = gw_ms;
+    rtt_prev_seq_    = seq;
+}
+
+void BleImuClient::recompute_rtt_stats() {
+    // Caller holds stats_mutex_
+    if (jitter_count_ == 0) return;
+
+    std::vector<double> v(jitter_buf_.begin(),
+                          jitter_buf_.begin() + jitter_count_);
+    double sum = std::accumulate(v.begin(), v.end(), 0.0);
+    stats_.jitter_mean_ms = sum / v.size();
+
+    std::sort(v.begin(), v.end());
+    size_t p95_idx = static_cast<size_t>(v.size() * 0.95);
+    if (p95_idx >= v.size()) p95_idx = v.size() - 1;
+    stats_.jitter_p95_ms = v[p95_idx];
+
+    uint64_t expected = stats_.packets_valid + stats_.seq_gaps;
+    stats_.loss_rate  = expected > 0
+        ? static_cast<double>(stats_.seq_gaps) / expected
+        : 0.0;
+}
+
 // ── Stats logging ─────────────────────────────────────────────────────────────
 
 void BleImuClient::log_stats() const {
@@ -122,6 +191,9 @@ void BleImuClient::log_stats() const {
               << " last_seq=" << s.last_seq
               << " hz=" << s.estimated_hz
               << " age_ms=" << s.last_packet_age_ms
+              << " jitter_mean=" << s.jitter_mean_ms << "ms"
+              << " jitter_p95=" << s.jitter_p95_ms << "ms"
+              << " loss=" << s.loss_rate * 100.0 << "%"
               << '\n';
 }
 

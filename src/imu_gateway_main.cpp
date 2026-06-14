@@ -206,7 +206,7 @@ int main(int argc, char **argv) {
                                      httplib::Response &res) {
         auto cs  = ble.get_stats();
         auto ds  = detector.get_stats();
-        char buf[640];
+        char buf[1024];
         std::snprintf(buf, sizeof(buf),
             "{"
             "\"imu_connected\":%s,"
@@ -215,6 +215,10 @@ int main(int argc, char **argv) {
             "\"packets_valid\":%llu,"
             "\"estimated_hz\":%.1f,"
             "\"reconnect_count\":%llu,"
+            "\"seq_gaps\":%llu,"
+            "\"loss_rate_pct\":%.2f,"
+            "\"jitter_mean_ms\":%.2f,"
+            "\"jitter_p95_ms\":%.2f,"
             "\"detector_state\":\"%s\","
             "\"samples_processed\":%llu,"
             "\"fall_candidates\":%llu,"
@@ -227,6 +231,10 @@ int main(int argc, char **argv) {
             (unsigned long long)cs.packets_valid,
             cs.estimated_hz,
             (unsigned long long)cs.reconnect_count,
+            (unsigned long long)cs.seq_gaps,
+            cs.loss_rate * 100.0,
+            cs.jitter_mean_ms,
+            cs.jitter_p95_ms,
             detector.get_state_str().c_str(),
             (unsigned long long)ds.samples,
             (unsigned long long)ds.candidates,
@@ -241,6 +249,60 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "[IMU] Health: http://%s:%d/health\n",
                      imu_cfg.health_host.c_str(), imu_cfg.health_port);
         health_server.listen(imu_cfg.health_host, imu_cfg.health_port);
+    });
+
+    // ── IMU heartbeat → BE (PATCH /internal/devices/:id/heartbeat) ───────────
+    // Posts BLE RTT metrics every 30s so BE shows imu_001 ONLINE with quality data.
+    std::thread imu_heartbeat([&]() {
+        const std::string &be_url = imu_cfg.be_base_url;  // e.g. http://localhost:3000/api/v1
+        auto [hb_host, hb_prefix] = [&]() -> std::pair<std::string, std::string> {
+            auto se = be_url.find("://");
+            auto ps = be_url.find('/', se + 3);
+            return { be_url.substr(0, ps), be_url.substr(ps) };
+        }();
+        std::string path = hb_prefix + "/internal/devices/" + imu_cfg.device_id + "/heartbeat";
+
+        while (g_running) {
+            // Spread first heartbeat 10s after start
+            for (int i = 0; i < 100 && g_running; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+            auto cs = ble.get_stats();
+            const char *status = ble.is_connected() ? "ONLINE" : "OFFLINE";
+
+            char body[512];
+            std::snprintf(body, sizeof(body),
+                "{"
+                "\"status\":\"%s\","
+                "\"metrics\":{"
+                  "\"estimatedHz\":%.2f,"
+                  "\"jitterMeanMs\":%.2f,"
+                  "\"jitterP95Ms\":%.2f,"
+                  "\"lossRatePct\":%.2f,"
+                  "\"seqGaps\":%llu,"
+                  "\"reconnects\":%llu"
+                "}"
+                "}",
+                status,
+                cs.estimated_hz,
+                cs.jitter_mean_ms,
+                cs.jitter_p95_ms,
+                cs.loss_rate * 100.0,
+                (unsigned long long)cs.seq_gaps,
+                (unsigned long long)cs.reconnect_count);
+
+            try {
+                httplib::Client cli(hb_host);
+                cli.set_connection_timeout(3);
+                cli.set_read_timeout(5);
+                auto r = cli.Patch(path,
+                    httplib::Headers{{"X-Edge-Secret", imu_cfg.edge_secret}},
+                    body, "application/json");
+                if (r)
+                    std::fprintf(stderr, "[IMU] heartbeat → %s  Hz=%.1f  jitter=%.1fms  loss=%.2f%%\n",
+                                 status, cs.estimated_hz, cs.jitter_mean_ms, cs.loss_rate * 100.0);
+            } catch (...) {}
+        }
     });
 
     // ── Shutdown watcher ──────────────────────────────────────────────────────
@@ -260,6 +322,7 @@ int main(int argc, char **argv) {
 
     ticker.join();
     watcher.join();
+    imu_heartbeat.join();
     health_thread.join();
     g_health_server = nullptr;
 

@@ -35,9 +35,17 @@ public:
         uint64_t invalid_magic    = 0;
         uint64_t checksum_errors  = 0;
         uint64_t reconnect_count  = 0;
+        uint64_t seq_gaps         = 0;      // total missing sequence numbers
         uint16_t last_seq         = 0;
-        int64_t  last_packet_age_ms = -1;  // -1 = no packet received yet
+        int64_t  last_packet_age_ms = -1;   // -1 = no packet received yet
         double   estimated_hz       = 0.0;
+
+        // BLE RTT proxy: jitter between Pi receive interval and ESP32 send interval.
+        // jitter = (gw_delta_ms - esp_delta_ms) per packet pair.
+        // Mean and p95 computed over a sliding 200-packet window.
+        double   jitter_mean_ms  = 0.0;
+        double   jitter_p95_ms   = 0.0;
+        double   loss_rate       = 0.0;    // seq_gaps / expected_packets [0,1]
     };
 
     using PacketCallback = std::function<void(const ImuPacket &)>;
@@ -84,4 +92,17 @@ private:
     // Hz estimation over a sliding 5-second window
     std::chrono::steady_clock::time_point hz_window_start_;
     uint64_t hz_window_count_ = 0;
+
+    // RTT jitter tracking (circular buffer, 200 samples)
+    static constexpr size_t RTT_WIN = 200;
+    std::array<double, RTT_WIN> jitter_buf_{};
+    size_t   jitter_head_  = 0;
+    size_t   jitter_count_ = 0;
+    bool     rtt_has_prev_ = false;
+    uint32_t rtt_prev_esp_ms_ = 0;
+    int64_t  rtt_prev_gw_ms_  = 0;
+    uint16_t rtt_prev_seq_    = 0;
+
+    void update_rtt(uint32_t esp_ms, int64_t gw_ms, uint16_t seq);
+    void recompute_rtt_stats();   // call while holding stats_mutex_
 };
