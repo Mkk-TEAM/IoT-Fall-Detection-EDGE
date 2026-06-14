@@ -1,0 +1,27 @@
+{
+  "_comment": "Fall detector thresholds — edit without rebuilding. Restart edge-imu-ble to reload.",
+
+  "impact_g": 2.5,
+  "freefall_g": 0.5,
+  "freefall_min_ms": 120,
+  "freefall_impact_window_ms": 1000,
+
+  "pre_impact_baseline_ms": 800,
+  "posture_eval_delay_ms": 500,
+
+  "upright_pitch_deg": -90.0,
+  "tilt_confirm_deg": 40.0,
+
+  "post_impact_window_ms": 10000,
+
+  "cooldown_ms": 10000,
+
+  "save_pre_event_seconds": 5,
+  "save_post_event_seconds": 5,
+
+  "ring_buffer_seconds": 20,
+  "sample_rate_hz_expected": 50,
+
+  "event_data_dir": "data/events",
+  "accel_unit_mps2": true
+}
